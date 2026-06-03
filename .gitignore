@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+*.local
+
+# Vite-copied docxodus WASM runtime (re-copied from node_modules on build)
+public/wasm/
+
+# Rust / Tauri
+src-tauri/target/
+
+# Sidecar binaries — large, platform-specific. Obtain via `cargo install liteparse`
+# and rename to lit-<target-triple> (see docs/prerequisites.md).
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+
+# Bundled OCR language data — download separately (see docs/prerequisites.md)
+src-tauri/resources/tessdata/*.traineddata
+
+# Generated test fixtures are committed (see tests/fixtures), but local scratch is not
+tests/fixtures/*.local.*
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.log
