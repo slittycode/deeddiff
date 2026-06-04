@@ -49,23 +49,63 @@ export async function compare(
 /**
  * Project a DOCX to anchor-addressed markdown and return ordered blocks. Unids
  * are stable across documents for unchanged content, which is what lets
- * clausePairs align cheaply. Object key order preserves document order.
+ * clausePairs align cheaply.
+ *
+ * The block text comes from the markdown body (the *full* text), NOT the
+ * `anchorIndex[id].textPreview`, which the engine documents as only "the first
+ * ~80 characters" — using the preview silently truncates long clauses before
+ * they reach the diff and the LLM.
  */
 export async function projectBlocks(docx: Uint8Array): Promise<MarkdownBlock[]> {
   await ensureInit();
   const projection = await convertWmlToMarkdown(docx, {
     resolveNumbering: true,
   });
-  const anchorIndex = (projection?.anchorIndex ?? {}) as Record<
-    string,
-    { unid?: string; textPreview?: string }
-  >;
+  const markdown = projection?.markdown ?? "";
+  const anchorIndex = (projection?.anchorIndex ?? {}) as Record<string, { unid?: string }>;
+  return parseMarkdownBlocks(markdown, anchorIndex);
+}
+
+const ANCHOR_RE = /^\{#([^}]+)\}\s?(.*)$/;
+const HEADING_RE = /^#{1,6}\s+/;
+
+/**
+ * Parse docxodus block-anchored markdown into ordered, full-text blocks. Each
+ * block element is rendered as `{#<id>} <text…>` on its own line (the default
+ * `AnchorRenderMode.Block`), blank-line separated; a block's full text may span
+ * several lines. `id` maps to a content-addressable `unid` via the anchor index
+ * (so unchanged blocks share a unid across documents). Pure — unit-tested
+ * without the WASM runtime.
+ */
+export function parseMarkdownBlocks(
+  markdown: string,
+  anchorIndex: Record<string, { unid?: string }> = {}
+): MarkdownBlock[] {
   const blocks: MarkdownBlock[] = [];
-  for (const [id, target] of Object.entries(anchorIndex)) {
-    const text = (target.textPreview ?? "").trim();
-    if (!text) continue;
-    blocks.push({ unid: target.unid ?? id, text });
+  let id: string | null = null;
+  let parts: string[] = [];
+
+  const flush = () => {
+    if (id !== null) {
+      const text = parts.join(" ").replace(/\s+/g, " ").trim();
+      if (text) blocks.push({ unid: anchorIndex[id]?.unid ?? id, text });
+    }
+    id = null;
+    parts = [];
+  };
+
+  for (const line of markdown.split("\n")) {
+    const m = line.match(ANCHOR_RE);
+    if (m) {
+      flush();
+      id = m[1];
+      parts = [m[2].replace(HEADING_RE, "")];
+    } else if (id !== null) {
+      if (line.trim() === "") flush();
+      else parts.push(line.replace(HEADING_RE, ""));
+    }
   }
+  flush();
   return blocks;
 }
 
