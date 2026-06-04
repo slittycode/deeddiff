@@ -93,8 +93,19 @@ fn client() -> reqwest::Client {
 /// GET /api/tags. A connection error => Ollama not running (distinct from an
 /// empty model list, which the caller treats as "no model pulled").
 pub async fn list_models() -> Result<Vec<ModelInfo>, CommandError> {
+    list_models_at(OLLAMA_BASE).await
+}
+
+/// Implementation of [`list_models`] against an explicit base URL.
+///
+/// Production code ALWAYS calls [`list_models`], which pins this to the
+/// hard-coded loopback [`OLLAMA_BASE`]; there is no runtime, config, or env
+/// mechanism that supplies a different base. The parameter exists solely so the
+/// HTTP integration tests can point the real `reqwest` stack at a local stub
+/// server — it does not weaken the "loopback-only" guarantee.
+pub async fn list_models_at(base: &str) -> Result<Vec<ModelInfo>, CommandError> {
     let resp = client()
-        .get(format!("{OLLAMA_BASE}/api/tags"))
+        .get(format!("{base}/api/tags"))
         .timeout(TAGS_TIMEOUT)
         .send()
         .await
@@ -114,9 +125,22 @@ pub async fn chat(
     user: &str,
     schema: Option<Value>,
 ) -> Result<String, CommandError> {
+    chat_at(OLLAMA_BASE, model, system, user, schema).await
+}
+
+/// Implementation of [`chat`] against an explicit base URL. See
+/// [`list_models_at`] for why the base is a parameter: production always uses
+/// the loopback [`OLLAMA_BASE`]; this seam is for the HTTP integration tests.
+pub async fn chat_at(
+    base: &str,
+    model: &str,
+    system: &str,
+    user: &str,
+    schema: Option<Value>,
+) -> Result<String, CommandError> {
     let body = build_chat_body(model, system, user, schema);
     let resp = client()
-        .post(format!("{OLLAMA_BASE}/api/chat"))
+        .post(format!("{base}/api/chat"))
         .timeout(CHAT_TIMEOUT)
         .json(&body)
         .send()

@@ -1,7 +1,23 @@
 # Manual testing checklist
 
-Automated tests (vitest + `cargo test`) cover the pure logic. The items below
-need the real GUI/WASM/Ollama/sidecar and so are verified by hand.
+Automated tests (vitest + `cargo test`) cover the pure logic **and now several
+paths that previously needed a live environment**:
+
+- **docxodus real-engine compare** (`src/lib/docxodus.integration.test.ts`):
+  loads the actual .NET-WASM engine under Node and runs compare → project →
+  clause-pairing on the committed fixtures (skips with a warning only if the host
+  genuinely can't instantiate the WASM).
+- **Notes pipeline** (`src/lib/pipeline.integration.test.ts`): blocks →
+  `buildClausePairs` → `generateNotes` across module boundaries, with the Tauri
+  `invoke` seam stubbed — covers concurrency, caching, cancellation, error
+  mapping, and clause-pair-only isolation.
+- **Ollama HTTP client** (`src-tauri/tests/ollama_http.rs`): drives the real
+  `reqwest` stack against an in-process stub server over a loopback socket —
+  request encoding, JSON parsing, 404/`not found`→`ModelNotFound`, and
+  connection-refused→`OllamaUnreachable`.
+
+The items below still need the real GUI/viewer/Ollama daemon/`lit` sidecar and so
+are verified by hand.
 
 ## Setup
 
