@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (typecheck · test · build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      # Builds the renderer and exercises the docxodus WASM static-copy step.
+      - run: npm run build
+
+  backend:
+    name: Backend (cargo test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Tauri's system libraries are required to compile the crate (the
+      # generate_context! macro links against WebKitGTK/GTK).
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            libayatana-appindicator3-dev libsoup-3.0-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # generate_context! validates that the configured sidecar exists for this
+      # target and that bundled resources are present. The real binary/OCR data
+      # are provided at packaging time (see docs/prerequisites.md); for a
+      # compile-only test run we drop in stubs.
+      - name: Provide build-time stubs (sidecar + OCR data)
+        run: |
+          TRIPLE=$(rustc -vV | sed -n 's/host: //p')
+          mkdir -p src-tauri/binaries src-tauri/resources/tessdata
+          printf '#!/bin/sh\nexit 0\n' > "src-tauri/binaries/lit-${TRIPLE}"
+          chmod +x "src-tauri/binaries/lit-${TRIPLE}"
+          : > src-tauri/resources/tessdata/eng.traineddata
+
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test --locked
