@@ -66,6 +66,21 @@ npm run make-fixtures      # generate sample contract-A/B.docx for trying it out
 npm run tauri dev          # launch the app
 ```
 
+### Headless comparison (no GUI, no AI)
+
+The deterministic comparison also runs from the command line — handy for scripts,
+CI, or when you just want the answer:
+
+```bash
+npm run compare -- before.docx after.docx           # Markdown report
+npm run compare -- before.docx after.docx --quiet    # one-line summary
+npm run compare -- before.docx after.docx --json      # machine-readable
+```
+
+Exit code is `0` when the documents are identical, `1` when they differ, `2` on
+error — so it composes like `diff`. (DOCX only; scanned PDFs need the desktop
+app's OCR sidecar.)
+
 For tests and static checks:
 
 ```bash
