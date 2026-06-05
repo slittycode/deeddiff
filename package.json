@@ -13,6 +13,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "tauri": "tauri",
+    "compare": "tsx scripts/compare.ts",
     "make-fixtures": "tsx scripts/make-fixtures.ts",
     "copy-wasm": "tsx scripts/copy-wasm.ts"
   },
