@@ -1,6 +1,42 @@
 import { diffArrays, diffWords } from "diff";
 import type { ChangeKind, ClausePair, MarkdownBlock, Revision } from "./types";
-import { normalizeForMatch } from "./clausePairs";
+
+/** Normalize text for matching: case/whitespace/punctuation-insensitive. */
+export function normalizeForMatch(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[‘’“”]/g, "'")
+    .replace(/[–—]/g, "-")
+    .trim();
+}
+
+/**
+ * Sørensen–Dice similarity over word tokens (0 = nothing in common, 1 = same
+ * words). Used to decide, within a changed region, which removed clause a given
+ * added clause is a *modification of* — rather than pairing positionally, which
+ * mislabels an independent removal + addition as a single edit.
+ */
+export function similarity(a: string, b: string): number {
+  const ta = normalizeForMatch(a).split(" ").filter(Boolean);
+  const tb = normalizeForMatch(b).split(" ").filter(Boolean);
+  if (ta.length === 0 && tb.length === 0) return 1;
+  if (ta.length === 0 || tb.length === 0) return 0;
+  const countA = new Map<string, number>();
+  for (const t of ta) countA.set(t, (countA.get(t) ?? 0) + 1);
+  const countB = new Map<string, number>();
+  for (const t of tb) countB.set(t, (countB.get(t) ?? 0) + 1);
+  let inter = 0;
+  for (const [t, c] of countA) inter += Math.min(c, countB.get(t) ?? 0);
+  return (2 * inter) / (ta.length + tb.length);
+}
+
+/**
+ * A removed clause and an added clause are treated as the same clause modified
+ * only when they share at least this fraction of their words. Below it, they are
+ * independent (one removed, one added).
+ */
+export const SIMILARITY_THRESHOLD = 0.4;
 
 /**
  * Deterministic, AI-free document comparison.
@@ -89,11 +125,18 @@ export function compareBlocks(
   let pendingAdded: MarkdownBlock[] = [];
 
   const flushChanged = () => {
-    const n = Math.max(pendingRemoved.length, pendingAdded.length);
-    for (let i = 0; i < n; i++) {
-      const before = pendingRemoved[i];
-      const after = pendingAdded[i];
-      if (before && after) {
+    if (pendingRemoved.length === 0 && pendingAdded.length === 0) return;
+
+    // Pair each added clause with the most similar removed clause (greedily,
+    // best matches first) above the threshold; the rest are genuine adds/removes.
+    const matchByAdded = matchBySimilarity(pendingRemoved, pendingAdded);
+    const matchedRemoved = new Set(matchByAdded.values());
+
+    // Emit in "after" document order: modified where matched, else added…
+    pendingAdded.forEach((after, a) => {
+      const r = matchByAdded.get(a);
+      if (r !== undefined) {
+        const before = pendingRemoved[r];
         items.push({
           unid: after.unid,
           status: "modified",
@@ -101,12 +144,17 @@ export function compareBlocks(
           after: after.text,
           segments: wordSegments(before.text, after.text),
         });
-      } else if (before) {
-        items.push({ unid: before.unid, status: "removed", before: before.text, after: "" });
-      } else if (after) {
+      } else {
         items.push({ unid: after.unid, status: "added", before: "", after: after.text });
       }
-    }
+    });
+    // …then any removed clause with no counterpart.
+    pendingRemoved.forEach((before, r) => {
+      if (!matchedRemoved.has(r)) {
+        items.push({ unid: before.unid, status: "removed", before: before.text, after: "" });
+      }
+    });
+
     pendingRemoved = [];
     pendingAdded = [];
   };
@@ -139,6 +187,35 @@ export function compareBlocks(
     items: withFormat,
     summary: summarize(withFormat, origBlocks.length, modBlocks.length),
   };
+}
+
+/**
+ * Greedily match added→removed by descending similarity (each used once, only
+ * above `SIMILARITY_THRESHOLD`). Returns a map of added-index → removed-index.
+ */
+function matchBySimilarity(
+  removed: MarkdownBlock[],
+  added: MarkdownBlock[]
+): Map<number, number> {
+  const candidates: { r: number; a: number; score: number }[] = [];
+  for (let r = 0; r < removed.length; r++) {
+    for (let a = 0; a < added.length; a++) {
+      const score = similarity(removed[r].text, added[a].text);
+      if (score >= SIMILARITY_THRESHOLD) candidates.push({ r, a, score });
+    }
+  }
+  candidates.sort((x, y) => y.score - x.score);
+
+  const usedR = new Set<number>();
+  const usedA = new Set<number>();
+  const map = new Map<number, number>();
+  for (const { r, a } of candidates) {
+    if (usedR.has(r) || usedA.has(a)) continue;
+    usedR.add(r);
+    usedA.add(a);
+    map.set(a, r);
+  }
+  return map;
 }
 
 /** Merge a removed item + an added item with equal normalized text into a move. */

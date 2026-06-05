@@ -111,6 +111,14 @@ describe("docxodus real-engine compare → project → pair", () => {
     expect(settlement?.segments?.some((s) => s.type === "delete" && s.value.includes("10"))).toBe(
       true
     );
+
+    // The removed termination clause and the added confidentiality clause are
+    // independent — similarity matching must NOT collapse them into one bogus
+    // 'modified' item (the previous positional pairing did exactly that).
+    const termination = items.find((i) => i.before.includes("Termination"));
+    expect(termination?.status).toBe("removed");
+    const confidentiality = items.find((i) => i.after.includes("Confidentiality"));
+    expect(confidentiality?.status).toBe("added");
   }, 120_000);
 
   it("reports two identical documents as identical", async () => {

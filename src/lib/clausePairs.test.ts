@@ -1,11 +1,6 @@
 import { describe, it, expect } from "vitest";
-import {
-  buildClausePairs,
-  collapseMoves,
-  appendFormatChanges,
-  normalizeForMatch,
-} from "./clausePairs";
-import type { ClausePair, MarkdownBlock, Revision } from "./types";
+import { buildClausePairs, normalizeForMatch } from "./clausePairs";
+import type { MarkdownBlock, Revision } from "./types";
 
 const b = (unid: string, text: string): MarkdownBlock => ({ unid, text });
 
@@ -31,15 +26,21 @@ describe("buildClausePairs", () => {
     expect(pairs[0]).toMatchObject({ kind: "removed", before: "Beta", after: "" });
   });
 
-  it("pairs a modified clause (text change => new unid)", () => {
-    const orig = [b("1", "Alpha"), b("2", "cap of $1,000,000")];
-    const mod = [b("1", "Alpha"), b("2b", "cap removed")];
+  it("pairs a modified clause (text change => new unid) by similarity", () => {
+    const orig = [
+      b("1", "Alpha"),
+      b("2", "The Provider shall indemnify the Client up to a cap of $1,000,000."),
+    ];
+    const mod = [
+      b("1", "Alpha"),
+      b("2b", "The Provider shall indemnify the Client."),
+    ];
     const pairs = buildClausePairs(orig, mod);
     expect(pairs).toHaveLength(1);
     expect(pairs[0]).toMatchObject({
       kind: "modified",
-      before: "cap of $1,000,000",
-      after: "cap removed",
+      before: "The Provider shall indemnify the Client up to a cap of $1,000,000.",
+      after: "The Provider shall indemnify the Client.",
     });
   });
 
@@ -52,19 +53,17 @@ describe("buildClausePairs", () => {
     expect(pairs[0].before).toBe("Confidentiality survives");
   });
 
-  it("handles N:M changed runs without losing clauses", () => {
+  it("treats a dissimilar removal + addition as independent, not a modification", () => {
     const orig = [b("1", "one"), b("2", "two"), b("3", "three")];
     const mod = [b("1", "one"), b("9", "alpha"), b("8", "beta"), b("7", "gamma")];
     const pairs = buildClausePairs(orig, mod);
-    // 2,3 removed; alpha,beta,gamma added → 3 pairs total, none dropped.
-    expect(pairs).toHaveLength(3);
+    // two, three share no words with alpha/beta/gamma → 2 removed + 3 added.
     const kinds = pairs.map((p) => p.kind).sort();
-    expect(kinds).toEqual(["added", "modified", "modified"]);
+    expect(kinds).toEqual(["added", "added", "added", "removed", "removed"]);
   });
-});
 
-describe("appendFormatChanges", () => {
-  it("adds format-only notes invisible to the text diff", () => {
+  it("emits a format-only pair from a FormatChanged revision", () => {
+    const blocks = [b("1", "Heading")];
     const revs: Revision[] = [
       {
         author: "x",
@@ -74,17 +73,10 @@ describe("appendFormatChanges", () => {
         formatChange: { changedPropertyNames: ["bold", "fontSize"] },
       },
     ];
-    const out = appendFormatChanges([], revs);
-    expect(out).toHaveLength(1);
-    expect(out[0].kind).toBe("format");
-    expect(out[0].detail).toContain("bold");
-  });
-});
-
-describe("collapseMoves", () => {
-  it("ignores empty removed text", () => {
-    const pairs: ClausePair[] = [{ id: "1", kind: "removed", before: "", after: "" }];
-    expect(collapseMoves(pairs)).toEqual(pairs);
+    const pairs = buildClausePairs(blocks, blocks, revs);
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0].kind).toBe("format");
+    expect(pairs[0].detail).toContain("bold");
   });
 });
 
