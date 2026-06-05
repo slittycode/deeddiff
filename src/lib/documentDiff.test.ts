@@ -21,8 +21,17 @@ describe("compareBlocks — full same/different classification (no AI)", () => {
   });
 
   it("classifies added / removed / modified while keeping unchanged context", () => {
-    const orig = [b("1", "Alpha"), b("2", "cap of $1,000,000"), b("3", "Gamma")];
-    const mod = [b("1", "Alpha"), b("2b", "cap removed"), b("3", "Gamma"), b("4", "New clause")];
+    const orig = [
+      b("1", "Alpha"),
+      b("2", "The Provider shall indemnify the Client up to a cap of $1,000,000."),
+      b("3", "Gamma"),
+    ];
+    const mod = [
+      b("1", "Alpha"),
+      b("2b", "The Provider shall indemnify the Client."),
+      b("3", "Gamma"),
+      b("4", "An entirely new confidentiality clause."),
+    ];
     const { items, summary } = compareBlocks(orig, mod);
 
     // Order is preserved: same, modified, same, added.
@@ -30,8 +39,19 @@ describe("compareBlocks — full same/different classification (no AI)", () => {
     expect(summary).toMatchObject({ same: 2, modified: 1, added: 1, changed: 2, identical: false });
 
     const modified = items.find((i) => i.status === "modified")!;
-    expect(modified.before).toBe("cap of $1,000,000");
-    expect(modified.after).toBe("cap removed");
+    expect(modified.before).toContain("cap of $1,000,000");
+    expect(modified.after).toBe("The Provider shall indemnify the Client.");
+  });
+
+  it("does NOT pair a dissimilar removal and addition as a modification", () => {
+    // A removed clause and an added clause that share no words are independent,
+    // even when they sit in the same changed region — they must not collapse
+    // into a spurious 'modified'.
+    const orig = [b("1", "Termination rights for either party on 30 days notice.")];
+    const mod = [b("2", "Confidentiality obligations survive for three years.")];
+    const { items, summary } = compareBlocks(orig, mod);
+    expect(summary).toMatchObject({ modified: 0, removed: 1, added: 1 });
+    expect(items.map((i) => i.status).sort()).toEqual(["added", "removed"]);
   });
 
   it("attaches word-level segments to a modified item", () => {
@@ -84,10 +104,30 @@ describe("compareBlocks — full same/different classification (no AI)", () => {
     const orig = [b("1", "one"), b("2", "two"), b("3", "three")];
     const mod = [b("1", "one"), b("9", "alpha"), b("8", "beta"), b("7", "gamma")];
     const { items, summary } = compareBlocks(orig, mod);
-    // 1 stays; two→alpha, three→beta modified; gamma added.
-    expect(summary).toMatchObject({ same: 1, modified: 2, added: 1 });
+    // 1 stays; two/three share no words with alpha/beta/gamma → 2 removed, 3 added.
+    expect(summary).toMatchObject({ same: 1, modified: 0, removed: 2, added: 3 });
     // No block is lost: every changed item carries non-empty text on its side.
     expect(items.every((i) => i.before || i.after)).toBe(true);
+  });
+
+  it("matches the most similar counterpart within a mixed changed run", () => {
+    const orig = [
+      b("1", "Payment is due within 30 days of invoice."),
+      b("2", "The agreement may be terminated for cause."),
+    ];
+    const mod = [
+      // Reordered + each lightly edited: similarity must pair them correctly,
+      // not positionally.
+      b("3", "The agreement may be terminated for cause or convenience."),
+      b("4", "Payment is due within 14 days of invoice."),
+    ];
+    const { items } = compareBlocks(orig, mod);
+    const payment = items.find((i) => i.after.includes("Payment"))!;
+    const termination = items.find((i) => i.after.includes("terminated"))!;
+    expect(payment.status).toBe("modified");
+    expect(payment.before).toContain("30 days");
+    expect(termination.status).toBe("modified");
+    expect(termination.before).toContain("terminated for cause.");
   });
 });
 
