@@ -4,18 +4,23 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import type { ClausePair, VersionInput } from "./lib/types";
 import { compare, projectBlocks, redlineToFile } from "./lib/docxodus";
-import { buildClausePairs } from "./lib/clausePairs";
+import {
+  compareBlocks,
+  changedClausePairs,
+  type ComparedItem,
+  type DocumentComparison,
+} from "./lib/documentDiff";
 import { ingestVersion } from "./lib/ingest";
 import { readBytes, saveBytes } from "./lib/platform";
 import { generateNotes, errorMessage, type GenerateHandle, type NoteState } from "./lib/notes";
 import { requestNote, unloadModel } from "./lib/ollama";
-import { buildNotesReport } from "./lib/report";
+import { buildComparisonReport } from "./lib/report";
 import { hasWasmSimd } from "./lib/wasmCheck";
 
 import { VersionPicker } from "./components/VersionPicker";
 import { ModelSelector } from "./components/ModelSelector";
 import { RedlineViewer } from "./components/RedlineViewer";
-import { ClauseNotesPanel } from "./components/ClauseNotesPanel";
+import { ComparisonPanel } from "./components/ComparisonPanel";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 
 type Stage =
@@ -32,6 +37,9 @@ const TEXT_ENCODER = new TextEncoder();
 export default function App() {
   const simdOk = hasWasmSimd();
 
+  // AI notes are an optional bonus, off by default: the comparison itself is
+  // fully deterministic and never needs a model.
+  const [aiEnabled, setAiEnabled] = useState(false);
   const [model, setModel] = useState<string | null>(null);
   const [before, setBefore] = useState<VersionInput | null>(null);
   const [after, setAfter] = useState<VersionInput | null>(null);
@@ -39,12 +47,14 @@ export default function App() {
   const [stage, setStage] = useState<Stage>({ name: "idle" });
   const [redlineFile, setRedlineFile] = useState<File | null>(null);
   const [redlineBytes, setRedlineBytes] = useState<Uint8Array | null>(null);
-  const [pairs, setPairs] = useState<ClausePair[]>([]);
-  const [notes, setNotes] = useState<NoteState[]>([]);
+  const [comparison, setComparison] = useState<DocumentComparison | null>(null);
+  const [notes, setNotes] = useState<Record<string, NoteState>>({});
   const [warning, setWarning] = useState<string | null>(null);
 
   const runEpoch = useRef(0);
   const noteHandle = useRef<GenerateHandle | null>(null);
+  // The changed clause pairs from the last run, indexed for note retry.
+  const changedPairs = useRef<ClausePair[]>([]);
 
   // Keep the window title in sync with the loaded versions.
   useEffect(() => {
@@ -71,8 +81,9 @@ export default function App() {
     setWarning(null);
     setRedlineFile(null);
     setRedlineBytes(null);
-    setPairs([]);
-    setNotes([]);
+    setComparison(null);
+    setNotes({});
+    changedPairs.current = [];
 
     try {
       setStage({ name: "ingesting", which: "before" });
@@ -84,7 +95,7 @@ export default function App() {
 
       if (a.fromOcr || b.fromOcr) {
         setWarning(
-          "One version was scanned and read via OCR — the rendered redline is best-effort; the change notes use normalized text and are authoritative."
+          "One version was scanned and read via OCR — the rendered redline is best-effort; the deterministic text comparison is authoritative."
         );
       }
       if (a.emptyText || b.emptyText) {
@@ -103,36 +114,36 @@ export default function App() {
         projectBlocks(b.docx),
       ]);
       if (stale()) return;
-      const clausePairs = buildClausePairs(origBlocks, modBlocks, revisions);
-      setPairs(clausePairs);
-      setNotes(clausePairs.map(() => ({ status: "pending" }) as NoteState));
 
-      if (clausePairs.length === 0) {
-        setStage({ name: "ready" });
-        return;
-      }
+      // The authoritative, AI-free determination of same vs. different.
+      const result = compareBlocks(origBlocks, modBlocks, revisions);
+      setComparison(result);
 
-      if (!model) {
+      const pairs = changedClausePairs(result);
+      changedPairs.current = pairs;
+
+      // AI notes are optional. Without them the result above is already complete.
+      if (!aiEnabled || !model || pairs.length === 0) {
         setStage({ name: "ready" });
-        setWarning("Select an Ollama model to generate change notes.");
+        if (aiEnabled && !model && pairs.length > 0) {
+          setWarning("Select an Ollama model to add AI change notes (optional).");
+        }
         return;
       }
 
       let completed = 0;
-      setStage({ name: "generating", done: 0, total: clausePairs.length });
-      noteHandle.current = generateNotes(model, clausePairs, (index, state) => {
+      setStage({ name: "generating", done: 0, total: pairs.length });
+      setNotes(Object.fromEntries(pairs.map((p) => [p.id, { status: "pending" } as NoteState])));
+      noteHandle.current = generateNotes(model, pairs, (index, state) => {
         if (stale()) return;
-        setNotes((prev) => {
-          const next = [...prev];
-          next[index] = state;
-          return next;
-        });
+        const unid = pairs[index].id;
+        setNotes((prev) => ({ ...prev, [unid]: state }));
         if (state.status === "done" || state.status === "error") {
           completed++;
           setStage(
-            completed >= clausePairs.length
+            completed >= pairs.length
               ? { name: "ready" }
-              : { name: "generating", done: completed, total: clausePairs.length }
+              : { name: "generating", done: completed, total: pairs.length }
           );
         }
       });
@@ -140,38 +151,27 @@ export default function App() {
       if (stale()) return;
       setStage({ name: "error", message: errorMessage(err) });
     }
-  }, [before, after, model]);
+  }, [before, after, model, aiEnabled]);
 
   const retryNote = useCallback(
-    async (index: number) => {
+    async (item: ComparedItem) => {
       if (!model) return;
-      const pair = pairs[index];
-      setNotes((prev) => {
-        const next = [...prev];
-        next[index] = { status: "pending" };
-        return next;
-      });
+      const pair = changedPairs.current.find((p) => p.id === item.unid);
+      if (!pair) return;
+      setNotes((prev) => ({ ...prev, [item.unid]: { status: "pending" } }));
       try {
         const note = await requestNote(model, pair);
-        setNotes((prev) => {
-          const next = [...prev];
-          next[index] = { status: "done", note };
-          return next;
-        });
+        setNotes((prev) => ({ ...prev, [item.unid]: { status: "done", note } }));
       } catch (err) {
-        setNotes((prev) => {
-          const next = [...prev];
-          next[index] = { status: "error", message: errorMessage(err) };
-          return next;
-        });
+        setNotes((prev) => ({ ...prev, [item.unid]: { status: "error", message: errorMessage(err) } }));
       }
     },
-    [model, pairs]
+    [model]
   );
 
-  // Best-effort note↔clause linkage: scroll the rendered redline to the clause.
-  const selectClause = useCallback((pair: ClausePair) => {
-    const snippet = (pair.after || pair.before).trim().slice(0, 40);
+  // Best-effort item↔clause linkage: scroll the rendered redline to the clause.
+  const selectClause = useCallback((item: ComparedItem) => {
+    const snippet = (item.after || item.before).trim().slice(0, 40);
     if (!snippet) return;
     const root = document.querySelector(".redline-pane");
     if (!root) return;
@@ -200,13 +200,13 @@ export default function App() {
   };
 
   const exportReport = async () => {
-    if (pairs.length === 0) return;
+    if (!comparison) return;
     const path = await save({ filters: [{ name: "Markdown", extensions: ["md"] }] });
     if (!path) return;
-    const md = buildNotesReport(pairs, notes, {
+    const md = buildComparisonReport(comparison, {
       nameA: before?.name ?? "before",
       nameB: after?.name ?? "after",
-      model: model ?? "(none)",
+      notes,
     });
     await saveBytes(path, TEXT_ENCODER.encode(md));
   };
@@ -233,7 +233,11 @@ export default function App() {
     <div className="app">
       <header className="toolbar">
         <h1>deeddiff</h1>
-        <ModelSelector value={model} onChange={setModel} />
+        <label className="ai-toggle" title="AI notes are an optional bonus; the comparison is always deterministic.">
+          <input type="checkbox" checked={aiEnabled} onChange={(e) => setAiEnabled(e.target.checked)} />
+          AI notes
+        </label>
+        {aiEnabled && <ModelSelector value={model} onChange={setModel} />}
         <div className="pickers">
           <VersionPicker label="Before" value={before} onChange={setBefore} />
           <button className="swap" title="Swap" onClick={swap} disabled={busy}>
@@ -248,7 +252,7 @@ export default function App() {
           <button onClick={exportRedline} disabled={!redlineBytes}>
             Export redline
           </button>
-          <button onClick={exportReport} disabled={pairs.length === 0}>
+          <button onClick={exportReport} disabled={!comparison}>
             Export report
           </button>
         </div>
@@ -264,10 +268,10 @@ export default function App() {
           </ErrorBoundary>
         </section>
         <aside className="notes-pane">
-          {stage.name === "ready" || stage.name === "generating" ? (
-            <ClauseNotesPanel
-              pairs={pairs}
-              notes={notes}
+          {comparison && (stage.name === "ready" || stage.name === "generating") ? (
+            <ComparisonPanel
+              comparison={comparison}
+              notes={aiEnabled ? notes : undefined}
               onSelect={selectClause}
               onRetry={retryNote}
             />
@@ -292,10 +296,10 @@ function StageBar({ stage }: { stage: Stage }) {
       text = "Generating redline…";
       break;
     case "pairing":
-      text = "Finding changed clauses…";
+      text = "Comparing clauses…";
       break;
     case "generating":
-      text = `Writing notes… ${stage.done}/${stage.total}`;
+      text = `Writing AI notes… ${stage.done}/${stage.total}`;
       break;
     case "error":
       return <div className="stage-bar error">{stage.message}</div>;

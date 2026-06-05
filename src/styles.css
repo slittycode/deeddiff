@@ -230,6 +230,137 @@ button.link {
   color: var(--muted);
 }
 
+/* AI toggle */
+.ai-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+.ai-toggle input {
+  cursor: pointer;
+}
+
+/* Deterministic comparison panel */
+.cmp-panel {
+  padding: 12px;
+}
+.cmp-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 4px 4px 12px;
+  flex-wrap: wrap;
+}
+.cmp-counts {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.cmp-row {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left-width: 4px;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+.cmp-row:hover {
+  border-color: var(--accent);
+}
+.cmp-row.dim {
+  opacity: 0.6;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.cmp-row.status-added {
+  border-left-color: var(--low);
+}
+.cmp-row.status-removed {
+  border-left-color: var(--high);
+}
+.cmp-row.status-modified {
+  border-left-color: var(--accent);
+}
+.cmp-row.status-moved {
+  border-left-color: var(--medium);
+}
+.cmp-row.status-format {
+  border-left-color: var(--none);
+}
+.cmp-head {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.cmp-before {
+  color: var(--high);
+  margin: 2px 0;
+}
+.cmp-after {
+  color: var(--low);
+  margin: 2px 0;
+}
+.cmp-detail {
+  color: var(--muted);
+  font-style: italic;
+  margin: 4px 0 0;
+}
+.cmp-same-text {
+  color: var(--muted);
+}
+.cmp-same-section {
+  margin-top: 8px;
+}
+
+/* Inline word-level diff */
+.inline-diff {
+  margin: 2px 0;
+  line-height: 1.5;
+}
+.seg-equal {
+  color: var(--text);
+}
+.seg-insert {
+  background: #d6f5dd;
+  color: #14622f;
+}
+.seg-delete {
+  background: #fbd6d6;
+  color: #8a1f1f;
+  text-decoration: line-through;
+}
+
+/* Status badges */
+.badge.kind-added {
+  background: var(--low);
+  color: #fff;
+}
+.badge.kind-removed {
+  background: var(--high);
+  color: #fff;
+}
+.badge.kind-modified {
+  background: var(--accent);
+  color: #fff;
+}
+.badge.kind-moved {
+  background: var(--medium);
+  color: #fff;
+}
+.badge.kind-format,
+.badge.kind-same {
+  background: var(--none);
+  color: #fff;
+}
+
 .clause-highlight {
   background: #fff3b0 !important;
   transition: background 0.4s ease;
