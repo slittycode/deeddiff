@@ -1,12 +1,18 @@
 # deeddiff
 
-**Local-first desktop tool to redline two versions of an agreement and explain
-each change in plain English. No cloud calls — everything runs on your machine.**
+**Local-first desktop tool that compares two versions of an agreement and tells
+you exactly what is the same and what is different — deterministically, with no
+AI required. No cloud calls; everything runs on your machine.**
 
 deeddiff compares two versions of a contract (DOCX or scanned PDF), renders a
-tracked-change **redline**, and for every changed clause asks a **local Ollama**
-model for a one-line "what changed and why it matters" note (e.g. _"indemnity cap
-removed"_, _"settlement moved from 10 to 5 working days"_).
+tracked-change **redline**, and produces a complete, **AI-free** classification of
+every block as _unchanged, added, removed, modified, or moved_ — with word-level
+before→after highlighting on each modified clause.
+
+A local [Ollama](https://ollama.com) model can be toggled on as an **optional
+bonus** to add a one-line _"what changed and why it matters"_ note to each change
+(e.g. _"indemnity cap removed"_, _"settlement moved from 10 to 5 working days"_).
+The determination of same vs. different never depends on it.
 
 ## How it works
 
@@ -15,24 +21,29 @@ removed"_, _"settlement moved from 10 to 5 working days"_).
                       │  DOCX → bytes
                       │  PDF  → liteparse sidecar (OCR if scanned) → synthesized DOCX
                       ▼
-        docxodus (WASM)  compareDocumentsWithLog  ──►  redline + revisions
+        docxodus (WASM)  compareDocuments + getRevisions  ──►  redline + revisions
                       │                                    │
    convertWmlToMarkdown (both sides)                 react-docxodus-viewer
                       │                                  (rendered redline)
-            anchor-keyed block diff
+            unid-keyed block diff + word-level diff   ◄── DETERMINISTIC CORE
                       ▼
-            changed clause pairs ──►  local Ollama (/api/chat, JSON schema)
+   full same/different classification (added/removed/modified/moved/format)
+                      │
+                      └─(optional)─► local Ollama (/api/chat, JSON schema)
                                           ▼
-                              per-clause "what changed / why it matters"
+                          per-change "what changed / why it matters" note
 ```
 
+- **Comparison core (no AI):** unid-keyed block alignment + `diffWords` produce a
+  complete, reproducible same/different classification with inline word diffs.
 - **Redline engine:** [`docxodus`](https://github.com/JSv4/Docxodus) (OpenXML
   tracked-change engine, WASM) + [`react-docxodus-viewer`](https://github.com/JSv4/react-docxodus-viewer).
 - **Scanned PDFs:** [`@llamaindex/liteparse`](https://github.com/run-llama/liteparse)
   runs offline OCR as a bundled sidecar; the extracted text is synthesized into a
-  DOCX so the same redline engine applies.
-- **Explanations:** a local [Ollama](https://ollama.com) model you choose at
-  runtime. Only the single changed clause pair is ever sent to it.
+  DOCX so the same engine applies.
+- **Explanations (optional):** a local [Ollama](https://ollama.com) model you
+  choose at runtime. Only the single changed clause pair is ever sent to it, and
+  only when you tick **AI notes**.
 
 ## No cloud, by construction
 

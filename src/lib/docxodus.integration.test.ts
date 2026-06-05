@@ -19,6 +19,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { initialize, isInitialized } from "docxodus";
 import { compare, projectBlocks, redlineToFile } from "./docxodus";
 import { buildClausePairs } from "./clausePairs";
+import { compareBlocks } from "./documentDiff";
 
 const WASM_DIR = resolve(process.cwd(), "node_modules/docxodus/dist/wasm/") + "/";
 const A = new Uint8Array(readFileSync(resolve(process.cwd(), "tests/fixtures/contract-A.docx")));
@@ -82,5 +83,42 @@ describe("docxodus real-engine compare → project → pair", () => {
     // The genuinely unchanged clause (shared unid) must NOT appear as a change —
     // this is the property that makes unid-keyed alignment worthwhile.
     expect(allText).not.toContain("governed by the laws of England");
+  }, 120_000);
+
+  it("produces a complete deterministic same/different classification (no AI)", async () => {
+    if (!wasmReady) return; // skipped: see beforeAll warning
+    const { revisions } = await compare(A, B);
+    const blocksA = await projectBlocks(A);
+    const blocksB = await projectBlocks(B);
+
+    const { items, summary } = compareBlocks(blocksA, blocksB, revisions);
+
+    // The fixtures differ, so they are not identical, yet some blocks are 'same'.
+    expect(summary.identical).toBe(false);
+    expect(summary.same).toBeGreaterThan(0);
+    expect(summary.changed).toBeGreaterThan(0);
+    // Item count accounts for the whole "after" document plus removed-only blocks.
+    expect(items.length).toBeGreaterThanOrEqual(summary.totalAfter);
+
+    // The unchanged governing-law clause is classified 'same'…
+    const law = items.find((i) => i.before.includes("governed by the laws of England"));
+    expect(law?.status).toBe("same");
+
+    // …and the settlement change carries a word-level segment delta (10 → 5).
+    const settlement = items.find(
+      (i) => i.status === "modified" && i.before.includes("working days")
+    );
+    expect(settlement?.segments?.some((s) => s.type === "delete" && s.value.includes("10"))).toBe(
+      true
+    );
+  }, 120_000);
+
+  it("reports two identical documents as identical", async () => {
+    if (!wasmReady) return; // skipped: see beforeAll warning
+    const blocksA = await projectBlocks(A);
+    const { summary } = compareBlocks(blocksA, blocksA, []);
+    expect(summary.identical).toBe(true);
+    expect(summary.changed).toBe(0);
+    expect(summary.same).toBe(blocksA.length);
   }, 120_000);
 });
